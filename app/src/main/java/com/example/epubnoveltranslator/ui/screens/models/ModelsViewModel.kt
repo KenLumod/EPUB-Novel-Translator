@@ -12,15 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-data class ModelTestMessage(
-    val id: String,
-    val text: String,
-    val isModel: Boolean
-)
-
 data class ModelTestState(
-    val messages: List<ModelTestMessage> = emptyList(),
-    val isGenerating: Boolean = false,
+    val response: String? = null,
+    val isTesting: Boolean = false,
     val errorMessage: String? = null
 )
 
@@ -63,14 +57,13 @@ class ModelsViewModel(application: Application) : AndroidViewModel(application) 
         modelManager.deleteModel(model.path)
     }
 
-    fun sendTestPrompt(input: String) {
-        val prompt = input.trim()
-        if (prompt.isBlank() || _testState.value.isGenerating) return
+    fun runModelTest() {
+        if (_testState.value.isTesting) return
 
         viewModelScope.launch {
             val path = modelManager.modelInfo.value.localFilePath
             if (path.isNullOrBlank()) {
-                _testState.value = _testState.value.copy(errorMessage = "Upload and validate a model before testing it.")
+                _testState.value = ModelTestState(errorMessage = "Upload and validate a model before testing it.")
                 return@launch
             }
 
@@ -78,7 +71,7 @@ class ModelsViewModel(application: Application) : AndroidViewModel(application) 
                 testSession.close()
                 val loadResult = testSession.loadModelSession(path)
                 if (loadResult.isFailure) {
-                    _testState.value = _testState.value.copy(
+                    _testState.value = ModelTestState(
                         errorMessage = loadResult.exceptionOrNull()?.localizedMessage
                             ?: "The model could not be initialized."
                     )
@@ -87,50 +80,35 @@ class ModelsViewModel(application: Application) : AndroidViewModel(application) 
                 loadedModelPath = path
             }
 
-            val replyId = "model-${System.currentTimeMillis()}"
-            val messages = _testState.value.messages +
-                ModelTestMessage("user-${System.currentTimeMillis()}", prompt, false) +
-                ModelTestMessage(replyId, "Thinking…", true)
-            _testState.value = ModelTestState(messages = messages, isGenerating = true)
+            val newConversation = testSession.startNewConversation()
+            if (newConversation.isFailure) {
+                _testState.value = ModelTestState(
+                    errorMessage = newConversation.exceptionOrNull()?.localizedMessage
+                        ?: "The model test session could not be started."
+                )
+                return@launch
+            }
+
+            _testState.value = ModelTestState(isTesting = true)
 
             val response = StringBuilder()
             try {
-                testSession.generateResponseStream(prompt).collect { token ->
+                testSession.generateResponseStream("Reply with exactly: Model test successful.").collect { token ->
                     response.append(token)
-                    _testState.value = ModelTestState(
-                        messages = messages.map { message ->
-                            if (message.id == replyId) message.copy(text = response.toString()) else message
-                        },
-                        isGenerating = true
-                    )
+                    _testState.value = ModelTestState(response = response.toString(), isTesting = true)
                 }
                 _testState.value = ModelTestState(
-                    messages = messages.map { message ->
-                        if (message.id == replyId) {
-                            message.copy(text = response.toString().trim().ifBlank { "No response generated." })
-                        } else {
-                            message
-                        }
-                    }
+                    response = response.toString().trim().ifBlank { "No response generated." }
                 )
             } catch (error: Throwable) {
                 _testState.value = ModelTestState(
-                    messages = messages.map { message ->
-                        if (message.id == replyId) {
-                            message.copy(text = "Error: ${error.localizedMessage ?: error.message}")
-                        } else {
-                            message
-                        }
-                    },
-                    errorMessage = "Model response failed."
+                    errorMessage = error.localizedMessage ?: error.message ?: "Model response failed."
                 )
             }
         }
     }
 
-    fun clearTestConversation() {
-        testSession.close()
-        loadedModelPath = null
+    fun clearTestResult() {
         _testState.value = ModelTestState()
     }
 

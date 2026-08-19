@@ -4,9 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -17,11 +14,9 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -449,8 +444,8 @@ fun ModelsScreen(
             ModelTestConsole(
                 state = testState,
                 enabled = modelInfo.downloadStatus == DownloadStatus.READY,
-                onSend = viewModel::sendTestPrompt,
-                onClear = viewModel::clearTestConversation
+                onTest = viewModel::runModelTest,
+                onClear = viewModel::clearTestResult
             )
         }
     }
@@ -477,18 +472,9 @@ private fun formatModelSize(bytes: Long): String = "%.2f GB".format(bytes / 1_07
 private fun ModelTestConsole(
     state: ModelTestState,
     enabled: Boolean,
-    onSend: (String) -> Unit,
+    onTest: () -> Unit,
     onClear: () -> Unit
 ) {
-    var input by rememberSaveable { mutableStateOf("") }
-    val listState = rememberLazyListState()
-
-    LaunchedEffect(state.messages.size) {
-        if (state.messages.isNotEmpty()) {
-            listState.animateScrollToItem(state.messages.lastIndex)
-        }
-    }
-
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -508,18 +494,18 @@ private fun ModelTestConsole(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Model Test Console", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Model Test", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        "Send a direct prompt to the loaded model.",
+                        "Run a quick response check for the active model.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 IconButton(
                     onClick = onClear,
-                    enabled = state.messages.isNotEmpty() && !state.isGenerating
+                    enabled = (state.response != null || state.errorMessage != null) && !state.isTesting
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Clear test conversation")
+                    Icon(Icons.Default.Refresh, contentDescription = "Clear test result")
                 }
             }
 
@@ -530,45 +516,19 @@ private fun ModelTestConsole(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                if (state.messages.isEmpty()) {
-                    // Do not reserve a conversation-sized blank area before the first prompt.
-                    Text(
-                        "Try: Explain the difference between a novel and a light novel.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
-                    )
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 220.dp, max = 420.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        contentPadding = PaddingValues(vertical = 4.dp)
+                Text(
+                    "The test asks the model for a short built-in response. No prompt is needed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                state.response?.let { response ->
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh
                     ) {
-                        items(state.messages, key = { it.id }) { message ->
-                            Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (message.isModel) {
-                                    MaterialTheme.colorScheme.surfaceContainerHigh
-                                } else {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                }
-                            ) {
-                                Text(
-                                    text = message.text,
-                                    modifier = Modifier.padding(12.dp),
-                                    color = if (message.isModel) {
-                                        MaterialTheme.colorScheme.onSurface
-                                    } else {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
+                        Text(response, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
 
@@ -576,32 +536,21 @@ private fun ModelTestConsole(
                     Text(error, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
 
-                Row(
+                Button(
+                    onClick = onTest,
+                    enabled = !state.isTesting,
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.weight(1f),
-                        enabled = !state.isGenerating,
-                        label = { Text("Message") },
-                        placeholder = { Text("Ask the model anything") },
-                        minLines = 1,
-                        maxLines = 4
-                    )
-                    FilledIconButton(
-                        onClick = {
-                            if (input.isNotBlank()) {
-                                onSend(input)
-                                input = ""
-                            }
-                        },
-                        enabled = input.isNotBlank() && !state.isGenerating
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send test prompt")
-                    }
+                    if (state.isTesting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("Testing model…")
+                    } else Text("Test Model")
                 }
             }
         }

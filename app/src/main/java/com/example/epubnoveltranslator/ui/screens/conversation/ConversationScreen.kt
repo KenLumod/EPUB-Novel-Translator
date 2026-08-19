@@ -163,7 +163,7 @@ fun ConversationScreen(
                         }
                     }
 
-                    Column(
+                    BoxWithConstraints(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
@@ -182,9 +182,13 @@ fun ConversationScreen(
                                 fontFamily = fontFamily,
                                 fontColor = Color(fontColorArgb),
                                 onAddReplacement = conversationViewModel::addReplacementFromOutput,
-                                showTranslationLoading = state.isStreaming &&
-                                    (translation.content == "Translating chapter with Gemma 3n..." || translation.content.isBlank()),
-                                modifier = Modifier.fillMaxSize()
+                                showTranslationLoading = state.isStreaming && translation.content.isBlank(),
+                                // Short streamed output should use only the height it needs.
+                                // Once it reaches the available reader height, its nested
+                                // scroll container takes over for the rest of the chapter.
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = maxHeight)
                             )
                         }
                     }
@@ -231,6 +235,40 @@ private fun ReaderOutputPane(
     showTranslationLoading: Boolean,
     modifier: Modifier = Modifier
 ) {
+    if (showTranslationLoading) {
+        // Keep the initial streaming state compact and centered. The reader pane is
+        // only created once the model has emitted actual chapter text.
+        Surface(
+            modifier = modifier.height(240.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                TranslationLoadingGif(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(150.dp)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Translating chapter…",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "The translated text will appear here as it arrives.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
+
     ChatMessageBubble(
         message = message,
         meaningSearchEnabled = meaningSearchEnabled,
@@ -239,7 +277,7 @@ private fun ReaderOutputPane(
         fontFamily = fontFamily,
         fontColor = fontColor,
         onAddReplacement = onAddReplacement,
-        showTranslationLoading = showTranslationLoading,
+        showTranslationLoading = false,
         readerStyle = true,
         modifier = modifier
     )
@@ -358,7 +396,7 @@ fun ChatMessageBubble(
     }
 
     Column(
-        modifier = if (isModel) modifier.fillMaxSize() else modifier.fillMaxWidth(),
+        modifier = if (isModel && !readerStyle) modifier.fillMaxSize() else modifier.fillMaxWidth(),
         horizontalAlignment = alignment
     ) {
         if (!readerStyle) {
@@ -377,7 +415,7 @@ fun ChatMessageBubble(
                 bottomEnd = if (isModel) 16.dp else 4.dp
             ),
             color = containerColor,
-            modifier = if (isModel) {
+            modifier = if (isModel && !readerStyle) {
                 Modifier.fillMaxWidth().weight(1f)
             } else {
                 Modifier.fillMaxWidth()
@@ -397,7 +435,14 @@ fun ChatMessageBubble(
                     onShowOriginal = { source, target -> originalTermInfo = source to target },
                     selectionActive = selectionActive,
                     onSelectionActiveChanged = { selectionActive = it },
-                    modifier = Modifier.fillMaxSize().padding(if (readerStyle) 18.dp else 14.dp)
+                    modifier = if (readerStyle) {
+                        Modifier
+                            .fillMaxWidth()
+                            .wrapContentHeight()
+                            .padding(18.dp)
+                    } else {
+                        Modifier.fillMaxSize().padding(14.dp)
+                    }
                 )
             } else {
                 Text(

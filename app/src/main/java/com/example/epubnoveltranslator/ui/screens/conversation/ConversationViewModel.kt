@@ -88,7 +88,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                 val promptTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.PROMPT)
                 val cachedMessages = listOf(
                     ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                    ChatItem("2", "Gemma 3n", chapter.translatedText, true, replacements)
+                    ChatItem("2", currentModelName(), chapter.translatedText, true, replacements)
                 )
                 _uiState.value = ConversationUiState.Content(
                     novelTitle = novel.title,
@@ -114,18 +114,17 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             TranslationProgress.start(chapter.id)
             try {
-            val modelFile = java.io.File(getApplication<Application>().filesDir, "models/gemma-3n-e4b.litertlm")
-            val path = modelManager.modelInfo.value.localFilePath ?: modelFile.absolutePath
+            val path = modelManager.modelInfo.value.localFilePath
             if (!llmSession.isLoaded() || loadedModelPath != path) {
                 if (llmSession.isLoaded()) llmSession.close()
 
-                if (!java.io.File(path).exists()) {
+                if (path == null || !java.io.File(path).exists()) {
                     _uiState.value = ConversationUiState.Content(
                         novelTitle = novel.title,
                         chapterTitle = chapter.title,
                         messages = listOf(
                             ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                            ChatItem("2", "Gemma 3n", "Error: No .litertlm model file uploaded. Please upload a model file in the Models tab first.", true)
+                            ChatItem("2", "Model", "Error: No .litertlm model file uploaded. Please upload a model file in the Models tab first.", true)
                         ),
                         isStreaming = false,
                         isCached = false,
@@ -139,7 +138,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                     chapterTitle = chapter.title,
                     messages = listOf(
                         ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                        ChatItem("2", "Gemma 3n", "Loading .litertlm model into memory...", true)
+                        ChatItem("2", currentModelName(), "Loading model into memory...", true)
                     ),
                     isStreaming = true,
                     isCached = false,
@@ -154,7 +153,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                         chapterTitle = chapter.title,
                         messages = listOf(
                             ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                            ChatItem("2", "Gemma 3n", "Error initializing model: $err", true)
+                            ChatItem("2", currentModelName(), "Error initializing model: $err", true)
                         ),
                         isStreaming = false,
                         isCached = false,
@@ -194,8 +193,8 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                 ),
                 ChatItem(
                     id = "2",
-                    sender = "Gemma 3n",
-                    content = "Translating chapter with Gemma 3n...",
+                    sender = currentModelName(),
+                    content = "",
                     isModel = true
                 )
             )
@@ -231,7 +230,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                         val visibleTranslation = (translatedChunks + responseForChunk.toString())
                             .joinToString("\n\n")
                         val updatedMessages = messages.toMutableList()
-                        updatedMessages[1] = ChatItem("2", "Gemma", visibleTranslation, true, replacementTerms)
+                        updatedMessages[1] = ChatItem("2", currentModelName(), visibleTranslation, true, replacementTerms)
 
                         _uiState.value = ConversationUiState.Content(
                             novelTitle = novel.title,
@@ -268,7 +267,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                     chapterTitle = chapter.title,
                     messages = listOf(
                         messages[0],
-                        ChatItem("2", "Gemma", finalText, true, replacementTerms)
+                        ChatItem("2", currentModelName(), finalText, true, replacementTerms)
                     ),
                     isStreaming = false,
                     isCached = true,
@@ -285,7 +284,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                         messages[0],
                         ChatItem(
                             "2",
-                            "Gemma",
+                            currentModelName(),
                             "Translation error: ${translationError ?: "No translated text was returned."}",
                             true
                         )
@@ -367,6 +366,10 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
         .replace("```", "")
         .replace("\\$", "")
         .trim()
+
+    private fun currentModelName(): String = modelManager.modelInfo.value.localFilePath
+        ?.let { modelManager.modelInfo.value.name }
+        ?: "Model"
 
     /**
      * LiteRT-LM counts both prompt and generated text in its context window.  Keeping

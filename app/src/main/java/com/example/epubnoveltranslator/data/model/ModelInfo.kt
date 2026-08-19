@@ -8,10 +8,10 @@ enum class DownloadStatus {
 }
 
 data class ModelInfo(
-    val id: String = "gemma-3n-e4b",
-    val name: String = "Gemma 3n E4B",
-    val description: String = "Lightweight on-device LLM optimized for translation",
-    val sizeBytes: Long = 2_400_000_000L,
+    val id: String = "",
+    val name: String = "No model selected",
+    val description: String = "Upload a .litertlm model file to begin translating",
+    val sizeBytes: Long = 0L,
     val downloadStatus: DownloadStatus = DownloadStatus.NOT_DOWNLOADED,
     val progressPercent: Int = 0,
     val localFilePath: String? = null,
