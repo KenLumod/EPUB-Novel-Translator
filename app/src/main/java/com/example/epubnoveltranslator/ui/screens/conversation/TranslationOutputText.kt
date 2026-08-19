@@ -60,10 +60,10 @@ fun TranslationOutputText(
     onSelectionActiveChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val rendered = remember(text, promptGlossaryTerms, replacementTerms) {
-        val replaced = replacementSpans(markdownSpans(text), replacementTerms, onShowOriginal)
-        glossaryHighlights(replaced, promptGlossaryTerms + replacementTerms, onShowOriginal)
+    val rendered = remember(text, replacementTerms) {
+        replacementSpans(markdownSpans(text), replacementTerms, onShowOriginal)
     }
+    val isUserTouching = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     AndroidView(
         modifier = modifier,
         factory = { context ->
@@ -72,11 +72,23 @@ fun TranslationOutputText(
                 isLongClickable = true
                 isFocusable = true
                 isFocusableInTouchMode = true
-                movementMethod = android.text.method.LinkMovementMethod.getInstance()
+                movementMethod = SelectableLinkMovementMethod
                 layoutParams = android.view.ViewGroup.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                     android.view.ViewGroup.LayoutParams.WRAP_CONTENT
                 )
+                setOnTouchListener { touchedView, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> isUserTouching.set(true)
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            val textView = touchedView as TextView
+                            if (!textView.hasSelection()) {
+                                isUserTouching.set(false)
+                            }
+                        }
+                    }
+                    false
+                }
                 customSelectionActionModeCallback = selectionCallback(
                     view = this,
                     meaningSearchEnabled = meaningSearchEnabled,
@@ -88,15 +100,12 @@ fun TranslationOutputText(
         },
         update = { view ->
             // A streamed token normally replaces the full output. Do not replace the
-            // TextView while Android is showing selection handles; doing so clears the
-            // selection, especially in later paragraphs of a growing translation.
-            if (!selectionActive && view.text.toString() != rendered.toString()) {
-                // Retain any cursor state the platform has created, then explicitly
-                // request a Compose/Android remeasure. Without this, a growing native
-                // TextView can paint lower paragraphs outside its last measured hit
-                // area, making them visible but impossible to long-press.
+            // TextView while Android is showing selection handles or user is touching down;
+            // doing so clears the selection and cancels long-press gesture.
+            if (!selectionActive && !isUserTouching.get() && view.text.toString() != rendered.toString()) {
                 view.setTextKeepState(rendered, TextView.BufferType.SPANNABLE)
                 view.requestLayout()
+                view.invalidate()
             }
             view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
             view.setTextColor(textColor.toArgb())
@@ -109,6 +118,29 @@ fun TranslationOutputText(
             }
         }
     )
+}
+
+private object SelectableLinkMovementMethod : android.text.method.ArrowKeyMovementMethod() {
+    override fun onTouchEvent(widget: TextView, buffer: android.text.Spannable, event: MotionEvent): Boolean {
+        val action = event.action
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
+            val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
+            val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
+            val layout = widget.layout
+            if (layout != null) {
+                val line = layout.getLineForVertical(y)
+                val off = layout.getOffsetForHorizontal(line, x.toFloat())
+                val links = buffer.getSpans(off, off, android.text.style.ClickableSpan::class.java)
+                if (links.isNotEmpty()) {
+                    if (action == MotionEvent.ACTION_UP) {
+                        links[0].onClick(widget)
+                    }
+                    return true
+                }
+            }
+        }
+        return super.onTouchEvent(widget, buffer, event)
+    }
 }
 
 private fun selectionCallback(
@@ -228,46 +260,6 @@ private fun replacementSpans(
     return SpannableString(result)
 }
 
-/** Highlights prompt and replacement glossary labels without changing the text itself. */
-private fun glossaryHighlights(
-    original: Spanned,
-    terms: List<GlossaryTermEntity>,
-    onShowOriginal: (String, String) -> Unit
-): SpannableString {
-    val usableTerms = terms
-        .filter { it.targetTerm.isNotBlank() }
-        .sortedByDescending { it.targetTerm.length }
-    if (usableTerms.isEmpty()) return SpannableString(original)
-
-    val labels = usableTerms
-        .map { it.targetTerm.trim() }
-        .filter(String::isNotBlank)
-        .distinctBy { it.lowercase() }
-        .sortedByDescending(String::length)
-    if (labels.isEmpty()) return SpannableString(original)
-
-    val matcher = Regex(labels.joinToString("|") { Regex.escape(it) }, RegexOption.IGNORE_CASE)
-    return SpannableString(original).also { result ->
-        matcher.findAll(original.toString()).forEach { match ->
-            val start = match.range.first
-            val end = match.range.last + 1
-            result.setSpan(
-                BackgroundColorSpan(GLOSSARY_HIGHLIGHT_COLOR),
-                start,
-                end,
-                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-            val term = usableTerms.firstOrNull { it.targetTerm.equals(match.value, ignoreCase = true) }
-            if (term != null && term.sourceTerm.isNotBlank()) {
-                result.setSpan(object : android.text.style.ClickableSpan() {
-                    override fun onClick(widget: android.view.View) {
-                        onShowOriginal(term.sourceTerm, term.targetTerm)
-                    }
-                }, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-        }
-    }
-}
 
 @Composable
 fun MeaningWebViewDialog(query: String, onDismiss: () -> Unit) {
