@@ -9,10 +9,10 @@ import android.text.Spanned
 import android.text.style.BackgroundColorSpan
 import android.text.style.StyleSpan
 import android.view.ActionMode
+import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
-import android.view.ViewConfiguration
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
@@ -72,19 +72,26 @@ fun TranslationOutputText(
                 isLongClickable = true
                 isFocusable = true
                 isFocusableInTouchMode = true
+                isVerticalScrollBarEnabled = true
+                isNestedScrollingEnabled = true
+                gravity = Gravity.TOP
                 movementMethod = SelectableLinkMovementMethod
                 layoutParams = android.view.ViewGroup.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 setOnTouchListener { touchedView, event ->
                     when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> isUserTouching.set(true)
+                        MotionEvent.ACTION_DOWN -> {
+                            isUserTouching.set(true)
+                            touchedView.parent?.requestDisallowInterceptTouchEvent(true)
+                        }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             val textView = touchedView as TextView
                             if (!textView.hasSelection()) {
                                 isUserTouching.set(false)
                             }
+                            touchedView.parent?.requestDisallowInterceptTouchEvent(false)
                         }
                     }
                     false
@@ -122,24 +129,30 @@ fun TranslationOutputText(
 
 private object SelectableLinkMovementMethod : android.text.method.ArrowKeyMovementMethod() {
     override fun onTouchEvent(widget: TextView, buffer: android.text.Spannable, event: MotionEvent): Boolean {
-        val action = event.action
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
-            val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
-            val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
-            val layout = widget.layout
-            if (layout != null) {
-                val line = layout.getLineForVertical(y)
-                val off = layout.getOffsetForHorizontal(line, x.toFloat())
-                val links = buffer.getSpans(off, off, android.text.style.ClickableSpan::class.java)
-                if (links.isNotEmpty()) {
-                    if (action == MotionEvent.ACTION_UP) {
-                        links[0].onClick(widget)
-                    }
-                    return true
-                }
+        // Handle glossary taps only on ACTION_UP when nothing is selected.
+        // Consuming ACTION_DOWN on a ClickableSpan blocks long-press selection.
+        if (event.actionMasked == MotionEvent.ACTION_UP && !widget.hasSelection()) {
+            val link = clickableSpanAt(widget, buffer, event)
+            if (link != null) {
+                link.onClick(widget)
+                return true
             }
         }
         return super.onTouchEvent(widget, buffer, event)
+    }
+
+    private fun clickableSpanAt(
+        widget: TextView,
+        buffer: android.text.Spannable,
+        event: MotionEvent
+    ): android.text.style.ClickableSpan? {
+        val layout = widget.layout ?: return null
+        val x = event.x.toInt() - widget.totalPaddingLeft + widget.scrollX
+        val y = event.y.toInt() - widget.totalPaddingTop + widget.scrollY
+        if (y < 0 || y > layout.height) return null
+        val line = layout.getLineForVertical(y)
+        val off = layout.getOffsetForHorizontal(line, x.toFloat())
+        return buffer.getSpans(off, off, android.text.style.ClickableSpan::class.java).firstOrNull()
     }
 }
 

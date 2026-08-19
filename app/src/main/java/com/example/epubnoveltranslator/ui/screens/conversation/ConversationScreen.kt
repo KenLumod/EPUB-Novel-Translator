@@ -3,9 +3,6 @@ package com.example.epubnoveltranslator.ui.screens.conversation
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -50,7 +47,6 @@ fun ConversationScreen(
     }
 
     val uiState by conversationViewModel.uiState.collectAsStateWithLifecycle()
-    val listState = rememberLazyListState()
     var showGlossary by remember { mutableStateOf(false) }
     var showReaderSettings by remember { mutableStateOf(false) }
     var fontSizeSp by remember { mutableFloatStateOf(readerPreferences.readerFontSizeSp) }
@@ -81,14 +77,6 @@ fun ConversationScreen(
             }
         }
         is ConversationUiState.Content -> {
-            // Do not restart a scroll animation for every streamed token. That made the
-            // list fight the user's gestures and rendered long translations janky.
-            LaunchedEffect(state.messages.size) {
-                if (state.messages.isNotEmpty()) {
-                    listState.animateScrollToItem(state.messages.size - 1)
-                }
-            }
-
             Scaffold(
                 topBar = {
                     TopAppBar(
@@ -175,27 +163,39 @@ fun ConversationScreen(
                         }
                     }
 
-                    // Chat Messages list
-                    LazyColumn(
-                        state = listState,
+                    Column(
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxWidth(),
-                        contentPadding = PaddingValues(16.dp),
+                            .fillMaxWidth()
+                            .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(state.messages, key = { it.id }) { message ->
-                            ChatMessageBubble(
-                                message = message,
-                                meaningSearchEnabled = state.meaningSearchEnabled,
-                                promptGlossaryTerms = state.promptGlossaryTerms,
-                                fontSizeSp = fontSizeSp,
-                                fontFamily = fontFamily,
-                                fontColor = Color(fontColorArgb),
-                                onAddReplacement = conversationViewModel::addReplacementFromOutput,
-                                showTranslationLoading = state.isStreaming && message.isModel &&
-                                    (message.content == "Translating chapter with Gemma 3n..." || message.content.isBlank())
-                            )
+                        state.messages.forEach { message ->
+                            val itemModifier = if (message.isModel) {
+                                Modifier.weight(1f).fillMaxWidth()
+                            } else {
+                                Modifier.fillMaxWidth()
+                            }
+                            Box(itemModifier) {
+                                key(message.id) {
+                                    ChatMessageBubble(
+                                        message = message,
+                                        meaningSearchEnabled = state.meaningSearchEnabled,
+                                        promptGlossaryTerms = state.promptGlossaryTerms,
+                                        fontSizeSp = fontSizeSp,
+                                        fontFamily = fontFamily,
+                                        fontColor = Color(fontColorArgb),
+                                        onAddReplacement = conversationViewModel::addReplacementFromOutput,
+                                        showTranslationLoading = state.isStreaming && message.isModel &&
+                                            (message.content == "Translating chapter with Gemma 3n..." || message.content.isBlank()),
+                                        modifier = if (message.isModel) {
+                                            Modifier.fillMaxSize()
+                                        } else {
+                                            Modifier.fillMaxWidth()
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -320,7 +320,8 @@ fun ChatMessageBubble(
     fontFamily: String = "serif",
     fontColor: Color = Color(0xFFBDE8F5),
     onAddReplacement: (String, String) -> Unit = { _, _ -> },
-    showTranslationLoading: Boolean = false
+    showTranslationLoading: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     var replacementSource by remember { mutableStateOf<String?>(null) }
     var meaningQuery by remember { mutableStateOf<String?>(null) }
@@ -340,7 +341,7 @@ fun ChatMessageBubble(
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = if (isModel) modifier.fillMaxSize() else modifier.fillMaxWidth(),
         horizontalAlignment = alignment
     ) {
         Text(
@@ -357,7 +358,11 @@ fun ChatMessageBubble(
                 bottomEnd = if (isModel) 16.dp else 4.dp
             ),
             color = containerColor,
-            modifier = Modifier.fillMaxWidth()
+            modifier = if (isModel) {
+                Modifier.fillMaxWidth().weight(1f)
+            } else {
+                Modifier.fillMaxWidth()
+            }
         ) {
             if (isModel) {
                 TranslationOutputText(
@@ -373,7 +378,7 @@ fun ChatMessageBubble(
                     onShowOriginal = { source, target -> originalTermInfo = source to target },
                     selectionActive = selectionActive,
                     onSelectionActiveChanged = { selectionActive = it },
-                    modifier = Modifier.fillMaxWidth().padding(14.dp)
+                    modifier = Modifier.fillMaxSize().padding(14.dp)
                 )
             } else {
                 Text(

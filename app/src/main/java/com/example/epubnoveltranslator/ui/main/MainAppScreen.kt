@@ -1,5 +1,6 @@
 package com.example.epubnoveltranslator.ui.main
 
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.*
@@ -36,6 +37,10 @@ fun MainAppScreen(
     val isBottomBarVisible = currentRoute in BottomNavItem.items.map { it.route }
 
     Scaffold(
+        // Every destination owns its own system-bar handling. Applying safe-drawing
+        // insets here as well makes nested Scaffolds reserve the status/navigation
+        // bar twice, leaving large blank bands above and below the reader.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (isBottomBarVisible) {
                 NavigationBar(
