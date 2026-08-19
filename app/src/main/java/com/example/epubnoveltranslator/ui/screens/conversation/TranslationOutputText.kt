@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
+import androidx.core.widget.NestedScrollView
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -67,31 +68,25 @@ fun TranslationOutputText(
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            TextView(context).apply {
+            val textView = TextView(context).apply {
                 setTextIsSelectable(true)
                 isLongClickable = true
                 isFocusable = true
                 isFocusableInTouchMode = true
-                isVerticalScrollBarEnabled = true
-                isNestedScrollingEnabled = true
                 gravity = Gravity.TOP
                 movementMethod = SelectableLinkMovementMethod
                 layoutParams = android.view.ViewGroup.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT
                 )
                 setOnTouchListener { touchedView, event ->
                     when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> {
-                            isUserTouching.set(true)
-                            touchedView.parent?.requestDisallowInterceptTouchEvent(true)
-                        }
+                        MotionEvent.ACTION_DOWN -> isUserTouching.set(true)
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             val textView = touchedView as TextView
                             if (!textView.hasSelection()) {
                                 isUserTouching.set(false)
                             }
-                            touchedView.parent?.requestDisallowInterceptTouchEvent(false)
                         }
                     }
                     false
@@ -104,8 +99,15 @@ fun TranslationOutputText(
                     onSelectionActiveChanged = onSelectionActiveChanged
                 )
             }
+            NestedScrollView(context).apply {
+                isFillViewport = true
+                isVerticalScrollBarEnabled = true
+                isNestedScrollingEnabled = true
+                addView(textView)
+            }
         },
-        update = { view ->
+        update = { container ->
+            val view = container.getChildAt(0) as TextView
             // A streamed token normally replaces the full output. Do not replace the
             // TextView while Android is showing selection handles or user is touching down;
             // doing so clears the selection and cancels long-press gesture.
@@ -127,6 +129,10 @@ fun TranslationOutputText(
     )
 }
 
+/**
+ * Lets Android's selectable TextView retain its normal long-press selection behavior.
+ * Scrolling is owned by the surrounding NestedScrollView instead of the movement method.
+ */
 private object SelectableLinkMovementMethod : android.text.method.ArrowKeyMovementMethod() {
     override fun onTouchEvent(widget: TextView, buffer: android.text.Spannable, event: MotionEvent): Boolean {
         // Handle glossary taps only on ACTION_UP when nothing is selected.

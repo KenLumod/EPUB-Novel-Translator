@@ -167,35 +167,25 @@ fun ConversationScreen(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .padding(16.dp)
                     ) {
-                        state.messages.forEach { message ->
-                            val itemModifier = if (message.isModel) {
-                                Modifier.weight(1f).fillMaxWidth()
-                            } else {
-                                Modifier.fillMaxWidth()
-                            }
-                            Box(itemModifier) {
-                                key(message.id) {
-                                    ChatMessageBubble(
-                                        message = message,
-                                        meaningSearchEnabled = state.meaningSearchEnabled,
-                                        promptGlossaryTerms = state.promptGlossaryTerms,
-                                        fontSizeSp = fontSizeSp,
-                                        fontFamily = fontFamily,
-                                        fontColor = Color(fontColorArgb),
-                                        onAddReplacement = conversationViewModel::addReplacementFromOutput,
-                                        showTranslationLoading = state.isStreaming && message.isModel &&
-                                            (message.content == "Translating chapter with Gemma 3n..." || message.content.isBlank()),
-                                        modifier = if (message.isModel) {
-                                            Modifier.fillMaxSize()
-                                        } else {
-                                            Modifier.fillMaxWidth()
-                                        }
-                                    )
-                                }
-                            }
+                        // A translation is a chapter-length document, not a chat bubble.
+                        // The single bounded reader pane keeps the header fixed while the
+                        // native selectable TextView scrolls as streamed chunks are appended.
+                        val translation = state.messages.lastOrNull { it.isModel }
+                        if (translation != null) {
+                            ReaderOutputPane(
+                                message = translation,
+                                meaningSearchEnabled = state.meaningSearchEnabled,
+                                promptGlossaryTerms = state.promptGlossaryTerms,
+                                fontSizeSp = fontSizeSp,
+                                fontFamily = fontFamily,
+                                fontColor = Color(fontColorArgb),
+                                onAddReplacement = conversationViewModel::addReplacementFromOutput,
+                                showTranslationLoading = state.isStreaming &&
+                                    (translation.content == "Translating chapter with Gemma 3n..." || translation.content.isBlank()),
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                     }
 
@@ -227,6 +217,32 @@ fun ConversationScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ReaderOutputPane(
+    message: ChatItem,
+    meaningSearchEnabled: Boolean,
+    promptGlossaryTerms: List<GlossaryTermEntity>,
+    fontSizeSp: Float,
+    fontFamily: String,
+    fontColor: Color,
+    onAddReplacement: (String, String) -> Unit,
+    showTranslationLoading: Boolean,
+    modifier: Modifier = Modifier
+) {
+    ChatMessageBubble(
+        message = message,
+        meaningSearchEnabled = meaningSearchEnabled,
+        promptGlossaryTerms = promptGlossaryTerms,
+        fontSizeSp = fontSizeSp,
+        fontFamily = fontFamily,
+        fontColor = fontColor,
+        onAddReplacement = onAddReplacement,
+        showTranslationLoading = showTranslationLoading,
+        readerStyle = true,
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -321,6 +337,7 @@ fun ChatMessageBubble(
     fontColor: Color = Color(0xFFBDE8F5),
     onAddReplacement: (String, String) -> Unit = { _, _ -> },
     showTranslationLoading: Boolean = false,
+    readerStyle: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var replacementSource by remember { mutableStateOf<String?>(null) }
@@ -344,14 +361,16 @@ fun ChatMessageBubble(
         modifier = if (isModel) modifier.fillMaxSize() else modifier.fillMaxWidth(),
         horizontalAlignment = alignment
     ) {
-        Text(
-            text = message.sender,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-        )
+        if (!readerStyle) {
+            Text(
+                text = message.sender,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
         Surface(
-            shape = RoundedCornerShape(
+            shape = if (readerStyle) RoundedCornerShape(24.dp) else RoundedCornerShape(
                 topStart = 16.dp,
                 topEnd = 16.dp,
                 bottomStart = if (isModel) 4.dp else 16.dp,
@@ -378,7 +397,7 @@ fun ChatMessageBubble(
                     onShowOriginal = { source, target -> originalTermInfo = source to target },
                     selectionActive = selectionActive,
                     onSelectionActiveChanged = { selectionActive = it },
-                    modifier = Modifier.fillMaxSize().padding(14.dp)
+                    modifier = Modifier.fillMaxSize().padding(if (readerStyle) 18.dp else 14.dp)
                 )
             } else {
                 Text(
