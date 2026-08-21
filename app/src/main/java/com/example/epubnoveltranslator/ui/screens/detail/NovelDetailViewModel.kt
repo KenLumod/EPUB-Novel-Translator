@@ -7,8 +7,8 @@ import com.example.epubnoveltranslator.data.db.ChapterEntity
 import com.example.epubnoveltranslator.data.db.GlossaryTermEntity
 import com.example.epubnoveltranslator.data.db.GlossaryKind
 import com.example.epubnoveltranslator.data.db.NovelEntity
+import com.example.epubnoveltranslator.data.queue.TranslationQueueManager
 import com.example.epubnoveltranslator.data.repository.NovelRepository
-import com.example.epubnoveltranslator.ui.screens.conversation.TranslationProgress
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,13 +31,15 @@ Return only the translated chapter. Preserve paragraph breaks and dialogue. Do n
 class NovelDetailViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = NovelRepository(application)
+    private val queueManager = TranslationQueueManager.getInstance(application)
 
     private val _novel = MutableStateFlow<NovelEntity?>(null)
     val novel: StateFlow<NovelEntity?> = _novel.asStateFlow()
 
     private val _chapters = MutableStateFlow<List<ChapterEntity>>(emptyList())
     val chapters: StateFlow<List<ChapterEntity>> = _chapters.asStateFlow()
-    val translatingChapterIds: StateFlow<Set<String>> = TranslationProgress.activeChapterIds
+    val translatingChapterIds: StateFlow<Set<String>> = queueManager.activeChapterIds
+    val queuedChapterIds: StateFlow<Set<String>> = queueManager.queuedChapterIds
 
     private val _promptGlossaryTerms = MutableStateFlow<List<GlossaryTermEntity>>(emptyList())
     val promptGlossaryTerms: StateFlow<List<GlossaryTermEntity>> = _promptGlossaryTerms.asStateFlow()

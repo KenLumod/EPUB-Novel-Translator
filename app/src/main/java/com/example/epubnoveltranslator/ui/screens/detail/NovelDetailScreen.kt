@@ -10,12 +10,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,7 +36,7 @@ import com.example.epubnoveltranslator.data.db.GlossaryKind
 fun NovelDetailScreen(
     novelId: String,
     onBackClick: () -> Unit,
-    onChapterClick: (chapterId: String) -> Unit,
+    onChapterClick: (String) -> Unit,
     viewModel: NovelDetailViewModel = viewModel()
 ) {
     LaunchedEffect(novelId) {
@@ -46,6 +46,7 @@ fun NovelDetailScreen(
     val novel by viewModel.novel.collectAsStateWithLifecycle()
     val chapters by viewModel.chapters.collectAsStateWithLifecycle()
     val translatingChapterIds by viewModel.translatingChapterIds.collectAsStateWithLifecycle()
+    val queuedChapterIds by viewModel.queuedChapterIds.collectAsStateWithLifecycle()
     val promptGlossaryTerms by viewModel.promptGlossaryTerms.collectAsStateWithLifecycle()
     val replacementGlossaryTerms by viewModel.replacementGlossaryTerms.collectAsStateWithLifecycle()
     val sortByStatus by viewModel.sortByStatus.collectAsStateWithLifecycle()
@@ -58,21 +59,23 @@ fun NovelDetailScreen(
 
     val translatedCount = chapters.count { it.isTranslated }
     val totalCount = chapters.size
-    val progressPercent = if (totalCount > 0) ((translatedCount * 100f) / totalCount).toInt() else 0
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            text = novelTitle,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (novelAuthor.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = novelTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                             Text(
                                 text = novelAuthor,
                                 style = MaterialTheme.typography.bodySmall,
@@ -113,43 +116,37 @@ fun NovelDetailScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Header Translation Progress Banner
-            if (totalCount > 0) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier.fillMaxWidth()
+            // Stats bar
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Translation Progress",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "$translatedCount/$totalCount ($progressPercent%)",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        LinearProgressIndicator(
-                            progress = { if (totalCount > 0) translatedCount / totalCount.toFloat() else 0f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
+                    Text(
+                        text = "Total Chapters: $totalCount",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Translated: $translatedCount / $totalCount",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
 
+            // Horizontally scrollable Tab Bar
             PrimaryScrollableTabRow(
                 selectedTabIndex = selectedTabIndex,
                 edgePadding = 16.dp,
-                modifier = Modifier.fillMaxWidth()
+                divider = { HorizontalDivider() }
             ) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
@@ -176,6 +173,7 @@ fun NovelDetailScreen(
                 0 -> ChaptersTab(
                     chapters = chapters,
                     translatingChapterIds = translatingChapterIds,
+                    queuedChapterIds = queuedChapterIds,
                     sortByStatus = sortByStatus,
                     onChapterClick = onChapterClick
                 )
@@ -223,6 +221,7 @@ fun NovelDetailScreen(
 fun ChaptersTab(
     chapters: List<ChapterEntity>,
     translatingChapterIds: Set<String>,
+    queuedChapterIds: Set<String>,
     sortByStatus: Boolean,
     onChapterClick: (String) -> Unit
 ) {
@@ -230,7 +229,7 @@ fun ChaptersTab(
     var previousChapters by remember { mutableStateOf(emptyList<ChapterEntity>()) }
     var previousSortByStatus by remember { mutableStateOf(sortByStatus) }
 
-    val sortedChapters = remember(chapters, translatingChapterIds, sortByStatus) {
+    val sortedChapters = remember(chapters, translatingChapterIds, queuedChapterIds, sortByStatus) {
         if (!sortByStatus) {
             chapters
         } else {
@@ -238,9 +237,10 @@ fun ChaptersTab(
                 compareBy(
                     { chapter ->
                         when {
-                            chapter.id in translatingChapterIds -> 1  // Translating
                             chapter.isTranslated -> 0                 // Translated
-                            else -> 2                                  // Untranslated
+                            chapter.id in translatingChapterIds -> 1  // Translating
+                            chapter.id in queuedChapterIds -> 2       // Queued
+                            else -> 3                                 // Untranslated
                         }
                     },
                     { it.chapterOrder }
@@ -249,7 +249,6 @@ fun ChaptersTab(
         }
     }
 
-    // Keep the reader looking at the same chapter across sort order changes
     LaunchedEffect(sortByStatus) {
         if (previousChapters.isNotEmpty() && previousSortByStatus != sortByStatus) {
             val visibleIndex = listState.firstVisibleItemIndex
@@ -323,6 +322,18 @@ fun ChaptersTab(
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(14.dp),
                                         strokeWidth = 2.dp
+                                    )
+                                }
+                            )
+                        } else if (chapter.id in queuedChapterIds) {
+                            AssistChip(
+                                onClick = { onChapterClick(chapter.id) },
+                                label = { Text("Queued") },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Schedule,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
                                     )
                                 }
                             )

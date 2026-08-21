@@ -9,6 +9,10 @@ object TranslationProgress {
     private val _activeChapterIds = MutableStateFlow<Set<String>>(emptySet())
     val activeChapterIds: StateFlow<Set<String>> = _activeChapterIds.asStateFlow()
 
+    fun setActive(chapterIds: Set<String>) {
+        _activeChapterIds.value = chapterIds
+    }
+
     fun start(chapterId: String) {
         _activeChapterIds.value = _activeChapterIds.value + chapterId
     }
