@@ -4,22 +4,29 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.epubnoveltranslator.R
 import com.example.epubnoveltranslator.data.db.ChapterEntity
 import com.example.epubnoveltranslator.data.db.GlossaryTermEntity
 import com.example.epubnoveltranslator.data.db.GlossaryKind
@@ -41,9 +48,10 @@ fun NovelDetailScreen(
     val translatingChapterIds by viewModel.translatingChapterIds.collectAsStateWithLifecycle()
     val promptGlossaryTerms by viewModel.promptGlossaryTerms.collectAsStateWithLifecycle()
     val replacementGlossaryTerms by viewModel.replacementGlossaryTerms.collectAsStateWithLifecycle()
+    val sortByStatus by viewModel.sortByStatus.collectAsStateWithLifecycle()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Chapters", "Prompt Glossary", "Replacement", "Prompt")
+    val tabs = listOf("Chapters", "Prompt Glossary", "Replacement", "Prompt", "Notes")
 
     val novelTitle = novel?.title ?: "Novel Details"
     val novelAuthor = novel?.author ?: ""
@@ -68,7 +76,9 @@ fun NovelDetailScreen(
                             Text(
                                 text = novelAuthor,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -79,6 +89,17 @@ fun NovelDetailScreen(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
                         )
+                    }
+                },
+                actions = {
+                    if (selectedTabIndex == 0) {
+                        IconButton(onClick = { viewModel.toggleSortByStatus() }) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_sort_vertical),
+                                contentDescription = if (sortByStatus) "Sorted by status" else "Sorted by EPUB order",
+                                tint = if (sortByStatus) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -125,15 +146,28 @@ fun NovelDetailScreen(
                 }
             }
 
-            PrimaryTabRow(
+            PrimaryScrollableTabRow(
                 selectedTabIndex = selectedTabIndex,
+                edgePadding = 16.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = selectedTabIndex == index,
                         onClick = { selectedTabIndex = index },
-                        text = { Text(title, fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal) }
+                        text = {
+                            Text(
+                                text = title,
+                                maxLines = 1,
+                                softWrap = false,
+                                fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal,
+                                color = if (selectedTabIndex == index) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
                     )
                 }
             }
@@ -142,6 +176,7 @@ fun NovelDetailScreen(
                 0 -> ChaptersTab(
                     chapters = chapters,
                     translatingChapterIds = translatingChapterIds,
+                    sortByStatus = sortByStatus,
                     onChapterClick = onChapterClick
                 )
                 1 -> GlossaryTab(
@@ -175,6 +210,10 @@ fun NovelDetailScreen(
                         viewModel.resetPromptTemplateToDefault()
                     }
                 )
+                4 -> NotesTab(
+                    currentNotes = novel?.notes ?: "",
+                    onSaveNotes = { viewModel.updateNotes(it) }
+                )
             }
         }
     }
@@ -184,8 +223,52 @@ fun NovelDetailScreen(
 fun ChaptersTab(
     chapters: List<ChapterEntity>,
     translatingChapterIds: Set<String>,
+    sortByStatus: Boolean,
     onChapterClick: (String) -> Unit
 ) {
+    val listState = rememberLazyListState()
+    var previousChapters by remember { mutableStateOf(emptyList<ChapterEntity>()) }
+    var previousSortByStatus by remember { mutableStateOf(sortByStatus) }
+
+    val sortedChapters = remember(chapters, translatingChapterIds, sortByStatus) {
+        if (!sortByStatus) {
+            chapters
+        } else {
+            chapters.sortedWith(
+                compareBy(
+                    { chapter ->
+                        when {
+                            chapter.id in translatingChapterIds -> 1  // Translating
+                            chapter.isTranslated -> 0                 // Translated
+                            else -> 2                                  // Untranslated
+                        }
+                    },
+                    { it.chapterOrder }
+                )
+            )
+        }
+    }
+
+    // Keep the reader looking at the same chapter across sort order changes
+    LaunchedEffect(sortByStatus) {
+        if (previousChapters.isNotEmpty() && previousSortByStatus != sortByStatus) {
+            val visibleIndex = listState.firstVisibleItemIndex
+            if (visibleIndex in previousChapters.indices) {
+                val anchorChapterId = previousChapters[visibleIndex].id
+                val newIndex = sortedChapters.indexOfFirst { it.id == anchorChapterId }
+                if (newIndex >= 0) {
+                    listState.scrollToItem(newIndex, listState.firstVisibleItemScrollOffset)
+                }
+            }
+        }
+        previousSortByStatus = sortByStatus
+        previousChapters = sortedChapters
+    }
+
+    LaunchedEffect(sortedChapters) {
+        previousChapters = sortedChapters
+    }
+
     if (chapters.isEmpty()) {
         Box(
             modifier = Modifier
@@ -201,11 +284,12 @@ fun ChaptersTab(
         }
     } else {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(chapters) { chapter ->
+            items(sortedChapters, key = { it.id }) { chapter ->
                 ElevatedCard(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -467,6 +551,67 @@ fun PromptTab(
                 .weight(1f),
             shape = RoundedCornerShape(12.dp),
             textStyle = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+@Composable
+fun NotesTab(
+    currentNotes: String,
+    onSaveNotes: (String) -> Unit
+) {
+    var notesText by remember(currentNotes) { mutableStateOf(currentNotes) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Novel Notes",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Icon(
+                imageVector = Icons.Default.EditNote,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Notes are shared across all chapters of this novel.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = notesText,
+            onValueChange = {
+                notesText = it
+                onSaveNotes(it)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            placeholder = {
+                Text(
+                    "Write your notes here… Use **bold** or *italic* markers for formatting.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            shape = RoundedCornerShape(12.dp),
+            textStyle = MaterialTheme.typography.bodyMedium
         )
     }
 }

@@ -1,6 +1,7 @@
 package com.example.epubnoveltranslator.ui.screens.conversation
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.epubnoveltranslator.data.db.ChapterEntity
@@ -37,7 +38,8 @@ sealed class ConversationUiState {
         val statusMessage: String = "",
         val meaningSearchEnabled: Boolean = false,
         val promptGlossaryTerms: List<GlossaryTermEntity> = emptyList(),
-        val replacementGlossaryTerms: List<GlossaryTermEntity> = emptyList()
+        val replacementGlossaryTerms: List<GlossaryTermEntity> = emptyList(),
+        val novelNotes: String = ""
     ) : ConversationUiState()
     data class Error(val message: String) : ConversationUiState()
 }
@@ -57,6 +59,7 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
     private var novelEntity: NovelEntity? = null
     private var chapterEntity: ChapterEntity? = null
     private var loadedModelPath: String? = null
+    private var translationJob: kotlinx.coroutines.Job? = null
 
     fun loadConversation(novelId: String, chapterId: String) {
         val currentContent = _uiState.value as? ConversationUiState.Content
@@ -99,7 +102,8 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                     statusMessage = "Loaded from Room cache",
                     meaningSearchEnabled = preferences.meaningSearchEnabled,
                     promptGlossaryTerms = promptTerms,
-                    replacementGlossaryTerms = replacements
+                    replacementGlossaryTerms = replacements,
+                    novelNotes = novel.notes
                 )
             } else {
                 startTranslation(forceRefresh = false)
@@ -111,193 +115,234 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
         val novel = novelEntity ?: return
         val chapter = chapterEntity ?: return
 
-        viewModelScope.launch {
+        translationJob?.cancel()
+        translationJob = viewModelScope.launch {
             TranslationProgress.start(chapter.id)
-            try {
-            val path = modelManager.modelInfo.value.localFilePath
-            if (!llmSession.isLoaded() || loadedModelPath != path) {
-                if (llmSession.isLoaded()) llmSession.close()
-
-                if (path == null || !java.io.File(path).exists()) {
-                    _uiState.value = ConversationUiState.Content(
-                        novelTitle = novel.title,
-                        chapterTitle = chapter.title,
-                        messages = listOf(
-                            ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                            ChatItem("2", "Model", "Error: No .litertlm model file uploaded. Please upload a model file in the Models tab first.", true)
-                        ),
-                        isStreaming = false,
-                        isCached = false,
-                        statusMessage = "Missing .litertlm model"
-                    )
-                    return@launch
-                }
-
-                _uiState.value = ConversationUiState.Content(
-                    novelTitle = novel.title,
-                    chapterTitle = chapter.title,
-                    messages = listOf(
-                        ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                        ChatItem("2", currentModelName(), "Loading model into memory...", true)
-                    ),
-                    isStreaming = true,
-                    isCached = false,
-                    statusMessage = "Loading model session..."
-                )
-
-                val loadResult = llmSession.loadModelSession(path)
-                if (loadResult.isFailure) {
-                    val err = loadResult.exceptionOrNull()?.localizedMessage ?: "Failed to initialize .litertlm model."
-                    _uiState.value = ConversationUiState.Content(
-                        novelTitle = novel.title,
-                        chapterTitle = chapter.title,
-                        messages = listOf(
-                            ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
-                            ChatItem("2", currentModelName(), "Error initializing model: $err", true)
-                        ),
-                        isStreaming = false,
-                        isCached = false,
-                        statusMessage = "Model load failed"
-                    )
-                    return@launch
-                }
-                loadedModelPath = path
-            }
-
-            val promptGlossaryTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.PROMPT)
-            val replacementTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.REPLACEMENT)
-            val promptTemplate = novel.customPromptTemplate ?: DEFAULT_PROMPT_TEMPLATE.trimIndent()
-
-            val chapterChunks = splitChapterIntoChunks(chapter.rawText)
-            if (chapterChunks.isEmpty()) {
-                _uiState.value = ConversationUiState.Error("This chapter has no readable text to translate.")
-                return@launch
-            }
-
-            // A chapter must not inherit turns from a previously opened chapter.
-            val newConversation = llmSession.startNewConversation()
-            if (newConversation.isFailure) {
-                _uiState.value = ConversationUiState.Error(
-                    newConversation.exceptionOrNull()?.localizedMessage
-                        ?: "Unable to start a translation conversation."
-                )
-                return@launch
-            }
-
-            val messages = mutableListOf(
-                ChatItem(
-                    id = "1",
-                    sender = "System",
-                    content = "Chapter loaded: ${chapter.title}\nApplied ${promptGlossaryTerms.size} prompt rules and ${replacementTerms.size} replacement rules.",
-                    isModel = false
-                ),
-                ChatItem(
-                    id = "2",
-                    sender = currentModelName(),
-                    content = "",
-                    isModel = true
-                )
+            // Start foreground service so translation survives background
+            val ctx = getApplication<Application>().applicationContext
+            ctx.startForegroundService(
+                TranslationForegroundService.buildStartIntent(ctx, novel.title, chapter.title)
             )
-
-            _uiState.value = ConversationUiState.Content(
-                novelTitle = novel.title,
-                chapterTitle = chapter.title,
-                messages = messages,
-                isStreaming = true,
-                isCached = false,
-                statusMessage = "Translating on-device...",
-                meaningSearchEnabled = preferences.meaningSearchEnabled,
-                promptGlossaryTerms = promptGlossaryTerms,
-                replacementGlossaryTerms = replacementTerms
-            )
-
-            val translatedChunks = mutableListOf<String>()
-            var translationError: String? = null
             try {
-                chapterChunks.forEachIndexed { index, chunk ->
-                    if (index > 0) {
-                        val resetResult = llmSession.startNewConversation()
-                        if (resetResult.isFailure) {
-                            throw resetResult.exceptionOrNull()
-                                ?: IllegalStateException("Unable to start the next translation chunk.")
-                        }
-                    }
+                val currentNotes = novelEntity?.notes ?: novel.notes
+                val path = modelManager.modelInfo.value.localFilePath
+                if (!llmSession.isLoaded() || loadedModelPath != path) {
+                    if (llmSession.isLoaded()) llmSession.close()
 
-                    val responseForChunk = StringBuilder()
-                    val formattedPrompt = buildFinalPrompt(promptTemplate, promptGlossaryTerms, chunk)
-                    llmSession.generateResponseStream(formattedPrompt).collect { token ->
-                        responseForChunk.append(token)
-                        val visibleTranslation = (translatedChunks + responseForChunk.toString())
-                            .joinToString("\n\n")
-                        val updatedMessages = messages.toMutableList()
-                        updatedMessages[1] = ChatItem("2", currentModelName(), visibleTranslation, true, replacementTerms)
-
+                    if (path == null || !java.io.File(path).exists()) {
                         _uiState.value = ConversationUiState.Content(
                             novelTitle = novel.title,
                             chapterTitle = chapter.title,
-                            messages = updatedMessages,
-                            isStreaming = true,
+                            messages = listOf(
+                                ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
+                                ChatItem("2", "Model", "Error: No .litertlm model file uploaded. Please upload a model file in the Models tab first.", true)
+                            ),
+                            isStreaming = false,
                             isCached = false,
-                            statusMessage = "Translating part ${index + 1} of ${chapterChunks.size}...",
-                            meaningSearchEnabled = preferences.meaningSearchEnabled,
-                            promptGlossaryTerms = promptGlossaryTerms,
-                            replacementGlossaryTerms = replacementTerms
+                            statusMessage = "Missing .litertlm model",
+                            novelNotes = currentNotes
                         )
+                        return@launch
                     }
 
-                    val completedChunk = cleanModelText(responseForChunk.toString())
-                    if (completedChunk.isBlank()) {
-                        throw IllegalStateException("The model returned no text for part ${index + 1}.")
+                    _uiState.value = ConversationUiState.Content(
+                        novelTitle = novel.title,
+                        chapterTitle = chapter.title,
+                        messages = listOf(
+                            ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
+                            ChatItem("2", currentModelName(), "Loading model into memory...", true)
+                        ),
+                        isStreaming = true,
+                        isCached = false,
+                        statusMessage = "Loading model session...",
+                        novelNotes = currentNotes
+                    )
+
+                    val loadResult = llmSession.loadModelSession(path)
+                    if (loadResult.isFailure) {
+                        val err = loadResult.exceptionOrNull()?.localizedMessage ?: "Failed to initialize .litertlm model."
+                        _uiState.value = ConversationUiState.Content(
+                            novelTitle = novel.title,
+                            chapterTitle = chapter.title,
+                            messages = listOf(
+                                ChatItem("1", "System", "Loaded chapter: ${chapter.title}", false),
+                                ChatItem("2", currentModelName(), "Error initializing model: $err", true)
+                            ),
+                            isStreaming = false,
+                            isCached = false,
+                            statusMessage = "Model load failed",
+                            novelNotes = currentNotes
+                        )
+                        return@launch
                     }
-                    translatedChunks += completedChunk
+                    loadedModelPath = path
                 }
-            } catch (error: Throwable) {
-                translationError = error.localizedMessage ?: error.message ?: "Unknown inference error"
-            }
 
-            val finalText = translatedChunks.joinToString("\n\n").trim()
-            val isError = translationError != null || finalText.isBlank()
+                val promptGlossaryTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.PROMPT)
+                val replacementTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.REPLACEMENT)
+                val promptTemplate = novel.customPromptTemplate ?: DEFAULT_PROMPT_TEMPLATE.trimIndent()
 
-            if (!isError) {
-                // Save completed successful translation into Room DB cache
-                repository.updateChapterTranslation(chapter.id, finalText)
+                val chapterChunks = splitChapterIntoChunks(chapter.rawText)
+                if (chapterChunks.isEmpty()) {
+                    _uiState.value = ConversationUiState.Error("This chapter has no readable text to translate.")
+                    return@launch
+                }
+
+                // A chapter must not inherit turns from a previously opened chapter.
+                val newConversation = llmSession.startNewConversation()
+                if (newConversation.isFailure) {
+                    _uiState.value = ConversationUiState.Error(
+                        newConversation.exceptionOrNull()?.localizedMessage
+                            ?: "Unable to start a translation conversation."
+                    )
+                    return@launch
+                }
+
+                val messages = mutableListOf(
+                    ChatItem(
+                        id = "1",
+                        sender = "System",
+                        content = "Chapter loaded: ${chapter.title}\nApplied ${promptGlossaryTerms.size} prompt rules and ${replacementTerms.size} replacement rules.",
+                        isModel = false
+                    ),
+                    ChatItem(
+                        id = "2",
+                        sender = currentModelName(),
+                        content = "",
+                        isModel = true
+                    )
+                )
 
                 _uiState.value = ConversationUiState.Content(
                     novelTitle = novel.title,
                     chapterTitle = chapter.title,
-                    messages = listOf(
-                        messages[0],
-                        ChatItem("2", currentModelName(), finalText, true, replacementTerms)
-                    ),
-                    isStreaming = false,
-                    isCached = true,
-                    statusMessage = "Translation complete • Saved to Room cache",
+                    messages = messages,
+                    isStreaming = true,
+                    isCached = false,
+                    statusMessage = "Translating on-device...",
                     meaningSearchEnabled = preferences.meaningSearchEnabled,
                     promptGlossaryTerms = promptGlossaryTerms,
-                    replacementGlossaryTerms = replacementTerms
+                    replacementGlossaryTerms = replacementTerms,
+                    novelNotes = novelEntity?.notes ?: novel.notes
                 )
-            } else {
-                _uiState.value = ConversationUiState.Content(
-                    novelTitle = novel.title,
-                    chapterTitle = chapter.title,
-                    messages = listOf(
-                        messages[0],
-                        ChatItem(
-                            "2",
-                            currentModelName(),
-                            "Translation error: ${translationError ?: "No translated text was returned."}",
-                            true
-                        )
-                    ),
-                    isStreaming = false,
-                    isCached = false,
-                    statusMessage = "Translation failed"
-                )
-            }
+
+                val translatedChunks = mutableListOf<String>()
+                var translationError: String? = null
+                var isCancelled = false
+                try {
+                    chapterChunks.forEachIndexed { index, chunk ->
+                        if (index > 0) {
+                            val resetResult = llmSession.startNewConversation()
+                            if (resetResult.isFailure) {
+                                throw resetResult.exceptionOrNull()
+                                    ?: IllegalStateException("Unable to start the next translation chunk.")
+                            }
+                        }
+
+                        val responseForChunk = StringBuilder()
+                        val formattedPrompt = buildFinalPrompt(promptTemplate, promptGlossaryTerms, chunk)
+                        llmSession.generateResponseStream(formattedPrompt).collect { token ->
+                            responseForChunk.append(token)
+                            val visibleTranslation = (translatedChunks + responseForChunk.toString())
+                                .joinToString("\n\n")
+                            val liveReplacementTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.REPLACEMENT)
+                            val livePromptTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.PROMPT)
+                            val updatedMessages = messages.toMutableList()
+                            updatedMessages[1] = ChatItem("2", currentModelName(), visibleTranslation, true, liveReplacementTerms)
+
+                            _uiState.value = ConversationUiState.Content(
+                                novelTitle = novel.title,
+                                chapterTitle = chapter.title,
+                                messages = updatedMessages,
+                                isStreaming = true,
+                                isCached = false,
+                                statusMessage = "Translating part ${index + 1} of ${chapterChunks.size}...",
+                                meaningSearchEnabled = preferences.meaningSearchEnabled,
+                                promptGlossaryTerms = livePromptTerms,
+                                replacementGlossaryTerms = liveReplacementTerms,
+                                novelNotes = novelEntity?.notes ?: novel.notes
+                            )
+                        }
+
+                        val completedChunk = cleanModelText(responseForChunk.toString())
+                        if (completedChunk.isBlank()) {
+                            throw IllegalStateException("The model returned no text for part ${index + 1}.")
+                        }
+                        translatedChunks += completedChunk
+                    }
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    isCancelled = true
+                    throw ce
+                } catch (error: Throwable) {
+                    translationError = error.localizedMessage ?: error.message ?: "Unknown inference error"
+                }
+
+                if (isCancelled) return@launch
+
+                val finalText = translatedChunks.joinToString("\n\n").trim()
+                val isError = translationError != null || finalText.isBlank()
+                val latestReplacementTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.REPLACEMENT)
+                val latestPromptTerms = repository.getGlossaryListForNovel(novel.id, GlossaryKind.PROMPT)
+                val latestNotes = novelEntity?.notes ?: novel.notes
+
+                if (!isError) {
+                    // Save completed successful translation into Room DB cache
+                    repository.updateChapterTranslation(chapter.id, finalText)
+
+                    _uiState.value = ConversationUiState.Content(
+                        novelTitle = novel.title,
+                        chapterTitle = chapter.title,
+                        messages = listOf(
+                            messages[0],
+                            ChatItem("2", currentModelName(), finalText, true, latestReplacementTerms)
+                        ),
+                        isStreaming = false,
+                        isCached = true,
+                        statusMessage = "Translation complete • Saved to Room cache",
+                        meaningSearchEnabled = preferences.meaningSearchEnabled,
+                        promptGlossaryTerms = latestPromptTerms,
+                        replacementGlossaryTerms = latestReplacementTerms,
+                        novelNotes = latestNotes
+                    )
+                } else {
+                    _uiState.value = ConversationUiState.Content(
+                        novelTitle = novel.title,
+                        chapterTitle = chapter.title,
+                        messages = listOf(
+                            messages[0],
+                            ChatItem(
+                                "2",
+                                currentModelName(),
+                                "Translation error: ${translationError ?: "No translated text was returned."}",
+                                true
+                            )
+                        ),
+                        isStreaming = false,
+                        isCached = false,
+                        statusMessage = "Translation failed",
+                        novelNotes = latestNotes
+                    )
+                }
             } finally {
                 TranslationProgress.finish(chapter.id)
+                // Stop the foreground service — notification dismissed automatically
+                val ctx = getApplication<Application>().applicationContext
+                ctx.startService(TranslationForegroundService.buildStopIntent(ctx))
             }
         }
+    }
+
+    fun cancelTranslation() {
+        translationJob?.cancel()
+        translationJob = null
+        chapterEntity?.id?.let { TranslationProgress.finish(it) }
+        val ctx = getApplication<Application>().applicationContext
+        ctx.startService(TranslationForegroundService.buildStopIntent(ctx))
+        val current = _uiState.value as? ConversationUiState.Content ?: return
+        _uiState.value = current.copy(
+            isStreaming = false,
+            statusMessage = "Translation stopped"
+        )
     }
 
     /** Called by the selection toolbar after the reader supplies a preferred replacement. */
@@ -313,18 +358,69 @@ class ConversationViewModel(application: Application) : AndroidViewModel(applica
                     kind = GlossaryKind.REPLACEMENT
                 )
             )
-            // Re-render a cached/finished response immediately with the new replacement.
-            val current = _uiState.value as? ConversationUiState.Content ?: return@launch
-            val terms = repository.getGlossaryListForNovel(novelId, GlossaryKind.REPLACEMENT)
-            _uiState.value = current.copy(messages = current.messages.map {
-                if (it.isModel) it.copy(replacementTerms = terms) else it
-            }, replacementGlossaryTerms = terms)
+            refreshGlossaryTerms(novelId)
         }
+    }
+
+    fun addGlossaryTerm(sourceTerm: String, targetTerm: String, note: String, kind: String) {
+        val novelId = currentNovelId ?: return
+        viewModelScope.launch {
+            repository.addGlossaryTerm(
+                GlossaryTermEntity(
+                    id = UUID.randomUUID().toString(),
+                    novelId = novelId,
+                    sourceTerm = sourceTerm.trim(),
+                    targetTerm = targetTerm.trim(),
+                    note = note.trim(),
+                    kind = kind
+                )
+            )
+            refreshGlossaryTerms(novelId)
+        }
+    }
+
+    fun updateGlossaryTerm(term: GlossaryTermEntity) {
+        val novelId = currentNovelId ?: return
+        viewModelScope.launch {
+            repository.addGlossaryTerm(term) // insert on conflict REPLACE
+            refreshGlossaryTerms(novelId)
+        }
+    }
+
+    fun deleteGlossaryTerm(term: GlossaryTermEntity) {
+        val novelId = currentNovelId ?: return
+        viewModelScope.launch {
+            repository.deleteGlossaryTerm(term)
+            refreshGlossaryTerms(novelId)
+        }
+    }
+
+    private suspend fun refreshGlossaryTerms(novelId: String) {
+        val current = _uiState.value as? ConversationUiState.Content ?: return
+        val replacementTerms = repository.getGlossaryListForNovel(novelId, GlossaryKind.REPLACEMENT)
+        val promptTerms = repository.getGlossaryListForNovel(novelId, GlossaryKind.PROMPT)
+        _uiState.value = current.copy(
+            messages = current.messages.map {
+                if (it.isModel) it.copy(replacementTerms = replacementTerms) else it
+            },
+            promptGlossaryTerms = promptTerms,
+            replacementGlossaryTerms = replacementTerms
+        )
     }
 
     fun refreshInteractionPreferences() {
         val current = _uiState.value as? ConversationUiState.Content ?: return
         _uiState.value = current.copy(meaningSearchEnabled = preferences.meaningSearchEnabled)
+    }
+
+    fun updateNotes(notes: String) {
+        val novelId = currentNovelId ?: return
+        novelEntity = novelEntity?.copy(notes = notes)
+        viewModelScope.launch {
+            repository.updateNovelNotes(novelId, notes)
+        }
+        val current = _uiState.value as? ConversationUiState.Content ?: return
+        _uiState.value = current.copy(novelNotes = notes)
     }
 
     override fun onCleared() {

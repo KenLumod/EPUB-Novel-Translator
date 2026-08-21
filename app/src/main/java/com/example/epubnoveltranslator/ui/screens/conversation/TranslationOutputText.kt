@@ -1,5 +1,6 @@
 package com.example.epubnoveltranslator.ui.screens.conversation
 
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -13,6 +14,7 @@ import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
@@ -79,15 +81,10 @@ fun TranslationOutputText(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                     android.view.ViewGroup.LayoutParams.WRAP_CONTENT
                 )
-                setOnTouchListener { touchedView, event ->
+                setOnTouchListener { _, event ->
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> isUserTouching.set(true)
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            val textView = touchedView as TextView
-                            if (!textView.hasSelection()) {
-                                isUserTouching.set(false)
-                            }
-                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> isUserTouching.set(false)
                     }
                     false
                 }
@@ -96,13 +93,30 @@ fun TranslationOutputText(
                     meaningSearchEnabled = meaningSearchEnabled,
                     onAddReplacement = onAddReplacement,
                     onSearchMeaning = onSearchMeaning,
-                    onSelectionActiveChanged = onSelectionActiveChanged
+                    onSelectionActiveChanged = onSelectionActiveChanged,
+                    isUserTouching = isUserTouching
                 )
             }
-            NestedScrollView(context).apply {
+            object : NestedScrollView(context) {
+                override fun requestChildRectangleOnScreen(
+                    child: View,
+                    rectangle: Rect,
+                    immediate: Boolean
+                ): Boolean {
+                    // Prevent TextView cursor/selection layout changes from pulling scroll position back to top
+                    return false
+                }
+            }.apply {
                 isFillViewport = true
                 isVerticalScrollBarEnabled = true
                 isNestedScrollingEnabled = true
+                setOnTouchListener { _, event ->
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> isUserTouching.set(true)
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> isUserTouching.set(false)
+                    }
+                    false
+                }
                 addView(textView)
             }
         },
@@ -111,7 +125,9 @@ fun TranslationOutputText(
             // A streamed token normally replaces the full output. Do not replace the
             // TextView while Android is showing selection handles or user is touching down;
             // doing so clears the selection and cancels long-press gesture.
-            if (!selectionActive && !isUserTouching.get() && view.text.toString() != rendered.toString()) {
+            val lastRendered = view.tag as? CharSequence
+            if (!selectionActive && !isUserTouching.get() && lastRendered !== rendered) {
+                view.tag = rendered
                 view.setTextKeepState(rendered, TextView.BufferType.SPANNABLE)
                 view.requestLayout()
                 view.invalidate()
@@ -122,7 +138,7 @@ fun TranslationOutputText(
             view.setLineSpacing(0f, 1.16f)
             if (!selectionActive) {
                 view.customSelectionActionModeCallback = selectionCallback(
-                    view, meaningSearchEnabled, onAddReplacement, onSearchMeaning, onSelectionActiveChanged
+                    view, meaningSearchEnabled, onAddReplacement, onSearchMeaning, onSelectionActiveChanged, isUserTouching
                 )
             }
         }
@@ -167,7 +183,8 @@ private fun selectionCallback(
     meaningSearchEnabled: Boolean,
     onAddReplacement: (String) -> Unit,
     onSearchMeaning: (String) -> Unit,
-    onSelectionActiveChanged: (Boolean) -> Unit
+    onSelectionActiveChanged: (Boolean) -> Unit,
+    isUserTouching: java.util.concurrent.atomic.AtomicBoolean
 ) = object : ActionMode.Callback {
     override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
         onSelectionActiveChanged(true)
@@ -196,12 +213,13 @@ private fun selectionCallback(
     }
 
     override fun onDestroyActionMode(mode: ActionMode) {
+        isUserTouching.set(false)
         onSelectionActiveChanged(false)
     }
 }
 
 /**
- * Small, deliberately conservative Markdown renderer for model output.  It only
+ * Small, deliberately conservative Markdown renderer for model output. It only
  * consumes delimiters that have a matching closing delimiter, so a partly streamed
  * token such as "**unfinished" remains visible until the model finishes it.
  */

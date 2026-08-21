@@ -64,6 +64,13 @@ class NovelRepository(private val context: Context) {
         }
     }
 
+    suspend fun updateNovelNotes(novelId: String, notes: String) {
+        val novel = novelDao.getNovelById(novelId)
+        if (novel != null) {
+            novelDao.updateNovel(novel.copy(notes = notes))
+        }
+    }
+
     suspend fun updateChapterTranslation(chapterId: String, translatedText: String) {
         val chapter = novelDao.getChapterById(chapterId) ?: return
         val wasAlreadyTranslated = chapter.isTranslated

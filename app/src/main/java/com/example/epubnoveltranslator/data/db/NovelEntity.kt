@@ -12,5 +12,6 @@ data class NovelEntity(
     val totalChapters: Int = 0,
     val translatedChapters: Int = 0,
     val customPromptTemplate: String? = null,
-    val addedTimestamp: Long = System.currentTimeMillis()
+    val addedTimestamp: Long = System.currentTimeMillis(),
+    val notes: String = ""
 )

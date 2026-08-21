@@ -44,6 +44,9 @@ class NovelDetailViewModel(application: Application) : AndroidViewModel(applicat
     private val _replacementGlossaryTerms = MutableStateFlow<List<GlossaryTermEntity>>(emptyList())
     val replacementGlossaryTerms: StateFlow<List<GlossaryTermEntity>> = _replacementGlossaryTerms.asStateFlow()
 
+    private val _sortByStatus = MutableStateFlow(false)
+    val sortByStatus: StateFlow<Boolean> = _sortByStatus.asStateFlow()
+
     private var currentNovelId: String? = null
 
     fun loadNovel(novelId: String) {
@@ -94,6 +97,18 @@ class NovelDetailViewModel(application: Application) : AndroidViewModel(applicat
             repository.updateNovelPrompt(novelId, newTemplate)
             _novel.value = _novel.value?.copy(customPromptTemplate = newTemplate)
         }
+    }
+
+    fun updateNotes(notes: String) {
+        val novelId = currentNovelId ?: return
+        viewModelScope.launch {
+            repository.updateNovelNotes(novelId, notes)
+            _novel.value = _novel.value?.copy(notes = notes)
+        }
+    }
+
+    fun toggleSortByStatus() {
+        _sortByStatus.value = !_sortByStatus.value
     }
 
     fun resetPromptTemplateToDefault() {

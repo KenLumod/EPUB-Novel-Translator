@@ -4,12 +4,20 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel as composeViewModel
 import com.example.epubnoveltranslator.data.UserPreferences
 import com.example.epubnoveltranslator.data.db.GlossaryTermEntity
+import com.example.epubnoveltranslator.data.db.GlossaryKind
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +58,7 @@ fun ConversationScreen(
     val uiState by conversationViewModel.uiState.collectAsStateWithLifecycle()
     var showGlossary by remember { mutableStateOf(false) }
     var showReaderSettings by remember { mutableStateOf(false) }
+    var showNotes by remember { mutableStateOf(false) }
     var fontSizeSp by remember { mutableFloatStateOf(readerPreferences.readerFontSizeSp) }
     var fontFamily by remember { mutableStateOf(readerPreferences.readerFontFamily) }
     var fontColorArgb by remember { mutableIntStateOf(readerPreferences.readerFontColor) }
@@ -103,23 +113,37 @@ fun ConversationScreen(
                             }
                         },
                         actions = {
+                            IconButton(onClick = { showNotes = true }) {
+                                Icon(Icons.Default.EditNote, contentDescription = "Novel notes")
+                            }
                             IconButton(onClick = { showReaderSettings = true }) {
                                 Icon(Icons.Default.FormatSize, contentDescription = "Reader appearance")
                             }
                             IconButton(onClick = { showGlossary = true }) {
                                 Icon(
-                                    imageVector = Icons.Default.FormatListBulleted,
+                                    imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
                                     contentDescription = "View glossary"
                                 )
                             }
-                            IconButton(
-                                onClick = { conversationViewModel.startTranslation(forceRefresh = true) },
-                                enabled = !state.isStreaming
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Re-translate"
-                                )
+                            if (state.isStreaming) {
+                                IconButton(
+                                    onClick = { conversationViewModel.cancelTranslation() }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Stop,
+                                        contentDescription = "Stop translation",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            } else {
+                                IconButton(
+                                    onClick = { conversationViewModel.startTranslation(forceRefresh = true) }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Re-translate"
+                                    )
+                                }
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
@@ -199,7 +223,17 @@ fun ConversationScreen(
                 TranslationGlossaryDialog(
                     promptTerms = state.promptGlossaryTerms,
                     replacementTerms = state.replacementGlossaryTerms,
-                    onDismiss = { showGlossary = false }
+                    onDismiss = { showGlossary = false },
+                    onAddTerm = conversationViewModel::addGlossaryTerm,
+                    onEditTerm = conversationViewModel::updateGlossaryTerm,
+                    onDeleteTerm = conversationViewModel::deleteGlossaryTerm
+                )
+            }
+            if (showNotes) {
+                NovelNotesDialog(
+                    initialNotes = state.novelNotes,
+                    onDismiss = { showNotes = false },
+                    onSave = { conversationViewModel.updateNotes(it) }
                 )
             }
             if (showReaderSettings) {
@@ -285,32 +319,255 @@ private fun ReaderOutputPane(
 
 @Composable
 private fun TranslationGlossaryDialog(
-    promptTerms: List<com.example.epubnoveltranslator.data.db.GlossaryTermEntity>,
-    replacementTerms: List<com.example.epubnoveltranslator.data.db.GlossaryTermEntity>,
-    onDismiss: () -> Unit
+    promptTerms: List<GlossaryTermEntity>,
+    replacementTerms: List<GlossaryTermEntity>,
+    onDismiss: () -> Unit,
+    onAddTerm: (source: String, target: String, note: String, kind: String) -> Unit,
+    onEditTerm: (GlossaryTermEntity) -> Unit,
+    onDeleteTerm: (GlossaryTermEntity) -> Unit
 ) {
+    var termToEdit by remember { mutableStateOf<GlossaryTermEntity?>(null) }
+    var addingKind by remember { mutableStateOf<String?>(null) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Chapter glossary") },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Chapter Glossary", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                GlossaryListSection("Prompt glossary", promptTerms, "No prompt terms.")
-                GlossaryListSection("Replacement glossary", replacementTerms, "No replacement terms.")
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                GlossaryListSection(
+                    title = "Prompt Glossary",
+                    description = "Used by the model during translation",
+                    terms = promptTerms,
+                    emptyText = "No prompt terms yet.",
+                    onAddClick = { addingKind = GlossaryKind.PROMPT },
+                    onEditClick = { termToEdit = it },
+                    onDeleteClick = onDeleteTerm
+                )
+
+                HorizontalDivider()
+
+                GlossaryListSection(
+                    title = "Replacement Glossary",
+                    description = "Replaced after translation in reader output",
+                    terms = replacementTerms,
+                    emptyText = "No replacement terms yet.",
+                    onAddClick = { addingKind = GlossaryKind.REPLACEMENT },
+                    onEditClick = { termToEdit = it },
+                    onDeleteClick = onDeleteTerm
+                )
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
     )
+
+    // Add dialog
+    addingKind?.let { kind ->
+        var source by remember { mutableStateOf("") }
+        var target by remember { mutableStateOf("") }
+        var note by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { addingKind = null },
+            title = {
+                Text(if (kind == GlossaryKind.PROMPT) "Add Prompt Term" else "Add Replacement Term")
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = source,
+                        onValueChange = { source = it },
+                        label = { Text(if (kind == GlossaryKind.PROMPT) "Source term" else "Original output") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = target,
+                        onValueChange = { target = it },
+                        label = { Text(if (kind == GlossaryKind.PROMPT) "Preferred translation" else "Replacement") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("Note (Optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (source.isNotBlank() && target.isNotBlank()) {
+                            onAddTerm(source.trim(), target.trim(), note.trim(), kind)
+                            addingKind = null
+                        }
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { addingKind = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Edit dialog
+    termToEdit?.let { term ->
+        var source by remember(term) { mutableStateOf(term.sourceTerm) }
+        var target by remember(term) { mutableStateOf(term.targetTerm) }
+        var note by remember(term) { mutableStateOf(term.note) }
+
+        AlertDialog(
+            onDismissRequest = { termToEdit = null },
+            title = { Text("Edit Glossary Term") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = source,
+                        onValueChange = { source = it },
+                        label = { Text("Source term") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = target,
+                        onValueChange = { target = it },
+                        label = { Text("Translation / Replacement") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        label = { Text("Note (Optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (source.isNotBlank() && target.isNotBlank()) {
+                            onEditTerm(
+                                term.copy(
+                                    sourceTerm = source.trim(),
+                                    targetTerm = target.trim(),
+                                    note = note.trim()
+                                )
+                            )
+                            termToEdit = null
+                        }
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { termToEdit = null }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
 @Composable
 private fun GlossaryListSection(
     title: String,
-    terms: List<com.example.epubnoveltranslator.data.db.GlossaryTermEntity>,
-    emptyText: String
+    description: String,
+    terms: List<GlossaryTermEntity>,
+    emptyText: String,
+    onAddClick: () -> Unit,
+    onEditClick: (GlossaryTermEntity) -> Unit,
+    onDeleteClick: (GlossaryTermEntity) -> Unit
 ) {
-    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-    if (terms.isEmpty()) Text(emptyText, style = MaterialTheme.typography.bodySmall)
-    else terms.forEach { Text("${it.sourceTerm} → ${it.targetTerm}", style = MaterialTheme.typography.bodyMedium) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "$title (${terms.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onAddClick) {
+                Icon(Icons.Default.Add, contentDescription = "Add $title", tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+
+        if (terms.isEmpty()) {
+            Text(
+                text = emptyText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+        } else {
+            terms.forEach { term ->
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${term.sourceTerm} ➔ ${term.targetTerm}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                            if (term.note.isNotEmpty()) {
+                                Text(
+                                    text = term.note,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Row {
+                            IconButton(onClick = { onEditClick(term) }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            IconButton(onClick = { onDeleteClick(term) }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -492,4 +749,59 @@ fun ChatMessageBubble(
         )
     }
     meaningQuery?.let { query -> MeaningWebViewDialog(query, onDismiss = { meaningQuery = null }) }
+}
+
+@Composable
+private fun NovelNotesDialog(
+    initialNotes: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var notesText by remember { mutableStateOf(initialNotes) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.EditNote,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Novel Notes")
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Notes are shared across all chapters of this novel.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = notesText,
+                    onValueChange = {
+                        notesText = it
+                        onSave(it)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 140.dp, max = 340.dp),
+                    placeholder = {
+                        Text(
+                            "Write your notes here… Use **bold** or *italic* markers for formatting.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    maxLines = Int.MAX_VALUE
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
+    )
 }
