@@ -30,10 +30,3 @@ An Android application designed for offline EPUB novel translation powered by lo
 1. **Import a Model**: Open the app, navigate to **Model Settings**, and import your local `.litertlm` model file.
 2. **Open an EPUB**: Select an EPUB book file from your device storage.
 3. **Translate**: Choose target languages/settings and start the translation process.
-
-##  Building from Source
-
-```bash
-git clone https://github.com/lukagray-dev/Nexus.git
-cd epub-novel-translator
-./gradlew assembleDebug
