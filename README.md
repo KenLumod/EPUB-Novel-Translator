@@ -10,7 +10,7 @@ An Android application designed for offline EPUB novel translation powered by lo
 - **Modern Jetpack Compose UI**: Built with Jetpack Compose, Material 3, and Kotlin.
 - **Background Support**: Background translation progress with Android notification support.
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 - **Language**: Kotlin
 - **UI Framework**: Jetpack Compose & Material 3
